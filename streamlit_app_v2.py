@@ -165,8 +165,18 @@ def adapt_to_user_optimizer(demand_df, staff_df, max_dev, unavailability, priori
                 for d_idx, d_raw in enumerate(df.columns):
                     d = week * 7 + d_idx + 1 # day index across 4 weeks
 
-                    Demand[(u, d, t)] = float(df.loc[t_raw, d_raw]) # get ("CATEDRAL", 1, 1) format for ("CATEDRAL", "MONDAY", "10:00 - 11:00")
+                    # Demand[(u, d, t)] = float(df.loc[t_raw, d_raw]) # get ("CATEDRAL", 1, 1) format for ("CATEDRAL", "MONDAY", "10:00 - 11:00")
 
+                    value = df.loc[t_raw, d_raw]
+
+                    if isinstance(value, pd.Series):
+                        raise ValueError(
+                            f"Duplicate demand columns detected for location '{u}'. "
+                            f"Column '{d_raw}' occurs {sum(df.columns == d_raw)} times. "
+                            f"Columns are: {df.columns.tolist()}"
+                        )
+
+                    Demand[(u, d, t)] = float(value)
 
     # --------------------------------------------------------------------
     # Validate demand and staff files - need total MaxHw ≥ total Demand
