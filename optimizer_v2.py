@@ -601,7 +601,7 @@ def build_and_solve_shift_model(
     #                            timeLimit=time_limit, gapRel=0.2)
 
     ### HiGHS SOLVER ###
-    solver = pulp.HiGHS_CMD(
+    solver = pulp.HiGHS( # pulp.HiGHS_CMD
         mip=True, # solve as mixed integer programming
         msg=True, # display the message log
         threads=8, # max number of threads
