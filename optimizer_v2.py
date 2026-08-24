@@ -600,38 +600,40 @@ def build_and_solve_shift_model(
     # solver = pulp.PULP_CBC_CMD(msg=True, presolve=True, cuts=True, strong=True, threads=8, 
     #                            timeLimit=time_limit, gapRel=0.2)
 
-    ### HiGHS SOLVER ###
-    solver = pulp.HiGHS( # pulp.HiGHS_CMD
-        mip=True, # solve as mixed integer programming
-        msg=True, # display the message log
-        threads=8, # max number of threads
-        timeLimit=time_limit, # time limit for model to run
-        gapRel=0.2, # relative gap tolerance for solver to stop
-        options=[
-            "parallel=on",
-            "presolve=on",
-            "mip_heuristic_effort=0.2", # from 0 to 1, higher means more time in heuristics and can find good solutions faster
-            "mip_improving_solution_save=on", # captures best incumbent even if kill run early
-            "mip_detect_symmetry=on", # have symmetry as workers are interchangeable and can have similar shift patterns; HiGHS can break symmetry and cut search space
-            "random_seed=1",
-        ],
-    )
-
-    # ### GUROBI SOLVER ###
-    # solver = pulp.GUROBI(
-    #     msg=True, # display the message log
+    # ### HiGHS SOLVER ###
+    # solver = pulp.HiGHS( # pulp.HiGHS_CMD
     #     mip=True, # solve as mixed integer programming
+    #     msg=True, # display the message log
+    #     threads=8, # max number of threads
     #     timeLimit=time_limit, # time limit for model to run
     #     gapRel=0.2, # relative gap tolerance for solver to stop
-    #     threads=8, # max number of threads
-    #     Presolve=2, # aggressive presolve
-    #     Heuristics=0.2, # 20% heuristic effort
-    #     Symmetry=2, # have symmetry as workers are interchangeable and can have similar shift patterns
-    #     Seed=1, 
-    #     MIPFocus=1, # prioritize finding good feasible solutions quickly over proving optimality
+    #     options=[
+    #         "parallel=on",
+    #         "presolve=on",
+    #         "mip_heuristic_effort=0.2", # from 0 to 1, higher means more time in heuristics and can find good solutions faster
+    #         "mip_improving_solution_save=on", # captures best incumbent even if kill run early
+    #         "mip_detect_symmetry=on", # have symmetry as workers are interchangeable and can have similar shift patterns; HiGHS can break symmetry and cut search space
+    #         "random_seed=1",
+    #     ],
     # )
 
+    ### GUROBI SOLVER ###
+    solver = pulp.GUROBI(
+        msg=True, # display the message log
+        mip=True, # solve as mixed integer programming
+        timeLimit=time_limit, # time limit for model to run
+        gapRel=0.2, # relative gap tolerance for solver to stop
+        threads=8, # max number of threads
+        Presolve=2, # aggressive presolve
+        Heuristics=0.2, # 20% heuristic effort
+        Symmetry=2, # have symmetry as workers are interchangeable and can have similar shift patterns
+        Seed=1, 
+        MIPFocus=1, # prioritize finding good feasible solutions quickly over proving optimality
+    )
+
     model.solve(solver)
+    print("DEBUG PuLP status:", model.status)
+    print("DEBUG PuLP status string:", pulp.LpStatus.get(model.status))
     end_time = time.time()
 
     status_str = pulp.LpStatus.get(model.status, str(model.status))
@@ -672,6 +674,9 @@ def build_and_solve_shift_model(
                 onduty_adult.append((d, t))
     onduty_adult = list(onduty_adult)
 
+    print("DEBUG objective:", pulp.value(model.objective))
+    print("DEBUG schedule length:", len(shift_schedule))
+    print("DEBUG first schedule item:", shift_schedule[:1])
 
     return {
         "status": "Optimal" if status_str == "Optimal" else status_str,
