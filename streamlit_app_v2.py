@@ -213,6 +213,20 @@ def adapt_to_user_optimizer(demand_df, staff_df, max_dev, unavailability, priori
              unavailability=unavailability, 
              constraints_flag=constraints_flag)
 
+    st.write("DEBUG: optimizer returned")
+    st.write(res)
+
+    if res is None:
+        st.error("Failed to run optimizer.")
+        st.stop()
+
+    st.write("DEBUG: optimizer status:", res.get("status"))
+    st.write("DEBUG: schedule length:", len(res.get("schedule", [])))
+
+    status = res.get("status", "N/A")
+    
+    st.write("STATUS FROM OPTIMIZER:", repr(res.get("status")))
+
     # Check for error
     if res.get("status") == "NO FEASIBLE SOLUTION WAS FOUND":
         st.error("NO FEASIBLE SOLUTION WAS FOUND")
