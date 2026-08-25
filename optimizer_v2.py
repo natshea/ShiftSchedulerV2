@@ -554,7 +554,7 @@ def build_and_solve_shift_model(
                 model += pulp.lpSum(worked_day[u][W_Su[u][0]][d_] for u in U_store for d_ in range(d, d + 10)) <= 9
         
 
-    ### MISC print code
+    ### MISC print code - check # Variables and Constraints, which solvers are available for pulp and to you
     print("Variables:", len(model.variables())) # See number of variables in model
     print("Constraints:", len(model.constraints)) # See number of constraints in model
     solver_list = pulp.listSolvers()
