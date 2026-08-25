@@ -671,10 +671,6 @@ def build_and_solve_shift_model(
                 onduty_adult.append((d, t))
     onduty_adult = list(onduty_adult)
 
-    print("DEBUG objective:", pulp.value(model.objective))
-    print("DEBUG schedule length:", len(shift_schedule))
-    print("DEBUG first schedule item:", shift_schedule[:1])
-
     return {
         "status": "Optimal" if status_str == "Optimal" else status_str,
         "objective": pulp.value(model.objective),
