@@ -631,8 +631,6 @@ def build_and_solve_shift_model(
     # )
 
     model.solve(solver)
-    print("DEBUG PuLP status:", model.status)
-    print("DEBUG PuLP status string:", pulp.LpStatus.get(model.status))
     end_time = time.time()
 
     status_str = pulp.LpStatus.get(model.status, str(model.status))
@@ -671,10 +669,6 @@ def build_and_solve_shift_model(
             if pulp.value(CLM[d][t]) > 0.5:
                 onduty_adult.append((d, t))
     onduty_adult = list(onduty_adult)
-
-    print("DEBUG objective:", pulp.value(model.objective))
-    print("DEBUG schedule length:", len(shift_schedule))
-    print("DEBUG first schedule item:", shift_schedule[:1])
 
     return {
         "status": "Optimal" if status_str == "Optimal" else status_str,
