@@ -3,7 +3,6 @@
 import pulp
 import time
 from utils import week_of, weekday_of
-# import math
 
 def build_and_solve_shift_model(
     W,                      # list: workers
