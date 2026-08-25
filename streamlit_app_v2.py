@@ -4,7 +4,12 @@
 # ------------------ Imports ------------------
 
 import streamlit as st
-from utils import read_table_file_demand, read_table_file_staff, build_shift_set_fallback, create_excel_download
+import copy
+import time as time_module
+from utils import (
+    read_table_file_demand, read_table_file_staff, build_shift_set_fallback,
+    create_excel_download, start_background_job, get_job_status, get_job_result, list_jobs
+)
 from collections import defaultdict
 
 try:
@@ -124,9 +129,19 @@ except Exception as e:
     opt_import_error = e
 
 # ------------------ Adapter ------------------
-def adapt_to_user_optimizer(demand_df, staff_df, max_dev, unavailability, priority_slots): 
+def adapt_to_user_optimizer(demand_df, staff_df, max_dev, unavailability, priority_slots,
+                             M_choice, N_choice, constraints_flag):
+    """
+    Pure function: no Streamlit calls, no module-level globals. This makes it safe
+    to run inside a background thread (Streamlit commands and widget-backed globals
+    are not thread-safe / not available outside the main script run).
+
+    Returns a dict. On validation failure: {"status": "VALIDATION_ERROR", "errors": [...]}
+    On infeasibility: {"status": "NO FEASIBLE SOLUTION WAS FOUND", ...}
+    Otherwise: the full results dict used by the UI.
+    """
     if opt_mod is None or not hasattr(opt_mod, "build_and_solve_shift_model"):
-        return None
+        return {"status": "OPTIMIZER_NOT_FOUND", "errors": ["Optimizer module not found or missing build_and_solve_shift_model."]}
 
     # --------------------------------------------------------------------
     # Sets
@@ -194,10 +209,8 @@ def adapt_to_user_optimizer(demand_df, staff_df, max_dev, unavailability, priori
                         f"the maximum contracted hours ({total_max_hr:.0f}h)."
                     )
 
-        if errors:
-            st.error("The staffing and demand files are inconsistent:\n\n"
-                     + "\n".join(errors))
-            st.stop()
+    if errors:
+        return {"status": "VALIDATION_ERROR", "errors": errors}
 
 
     # --------------------------------------------------------------------
@@ -212,12 +225,13 @@ def adapt_to_user_optimizer(demand_df, staff_df, max_dev, unavailability, priori
              Max_Deviation=float(max_dev), 
              unavailability=unavailability, 
              constraints_flag=constraints_flag)
+             # time_limit intentionally NOT overridden here - optimizer_v2.py's own
+             # default governs, since solves can legitimately run for hours.
 
 
     # Check for error
     if res.get("status") == "NO FEASIBLE SOLUTION WAS FOUND":
-        st.error("NO FEASIBLE SOLUTION WAS FOUND")
-        st.stop()
+        return {"status": "NO FEASIBLE SOLUTION WAS FOUND", "errors": []}
 
     # Pull in tables from optimizer
     shift_schedule = res.get("shift_schedule", [])
@@ -624,6 +638,9 @@ else:
 
 
 # ------------------ Solve ------------------
+if "job_history" not in st.session_state:
+    st.session_state["job_history"] = []  # job_ids started from this browser session, most recent first
+
 if st.button("Solve", key="solve_button"):
     if opt_mod is None or not hasattr(opt_mod, "build_and_solve_shift_model"):
         st.error("Optimizer not found or missing build_and_solve_shift_model.")
@@ -631,29 +648,89 @@ if st.button("Solve", key="solve_button"):
             st.caption(f"Import error: {opt_import_error}")
         st.stop()
 
-    res = adapt_to_user_optimizer(
-        st.session_state["demand_df"],
-        st.session_state["staff_df"],
-        max_dev,
-        st.session_state["unavailability"], 
-        st.session_state["priority_slots"]
+    # Snapshot every input the solve needs. This is essential: the solve runs in
+    # a background thread that may still be running the NEXT time this script
+    # reruns (e.g. if the user tweaks a sidebar widget), and widgets/session_state
+    # are mutable. Without snapshotting, the background thread could end up
+    # reading values that changed after the job was submitted.
+    job_id = start_background_job(
+        adapt_to_user_optimizer,
+        copy.deepcopy(st.session_state["demand_df"]),
+        copy.deepcopy(st.session_state["staff_df"]),
+        float(max_dev),
+        copy.deepcopy(st.session_state["unavailability"]),
+        copy.deepcopy(st.session_state["priority_slots"]),
+        int(M_choice),
+        int(N_choice),
+        copy.deepcopy(constraints_flag),
     )
+    st.session_state["job_history"].insert(0, job_id)
+    st.session_state["current_job_id"] = job_id
+    st.rerun()
 
-    # Validate res
-    if res is None:
-        st.error("Failed to run optimizer.")
-        st.stop()
 
+# --------------------------------------------------------------------
+# Job status / results
+# --------------------------------------------------------------------
+st.markdown("---")
+st.markdown("### Job Status")
+st.caption(
+    "Solves can take hours. This runs independently of your browser connection - "
+    "closing the tab or losing the connection won't lose the job. Save the job ID "
+    "below to check back later from any browser, on this same deployed app."
+)
+
+known_jobs = list_jobs()  # everything on disk, so even a brand-new session can find old jobs
+
+default_job_id = st.session_state.get("current_job_id", "")
+job_id_input = st.text_input(
+    "Job ID to check",
+    value=default_job_id,
+    key="job_id_lookup",
+    placeholder="e.g. 20260825_143000_ab12cd34",
+)
+
+if known_jobs:
+    with st.expander(f"Recent jobs on this deployment ({len(known_jobs)})"):
+        for jid, jstatus in known_jobs:
+            st.write(f"`{jid}` — {jstatus}")
+
+res = None
+if job_id_input:
+    job_status = get_job_status(job_id_input)
+
+    if job_status == "unknown":
+        st.warning(f"No job found with ID `{job_id_input}`.")
+    elif job_status == "running":
+        auto_refresh = st.checkbox("Auto-refresh while waiting", value=True, key="auto_refresh_job")
+        st.info(f"Job `{job_id_input}` is still running. Check back anytime - "
+                "this page doesn't need to stay open.")
+        if auto_refresh:
+            time_module.sleep(5)
+            st.rerun()
+    elif job_status == "error":
+        err_res = get_job_result(job_id_input)
+        st.error("The job failed with an error.")
+        if err_res:
+            for e in err_res.get("errors", []):
+                st.caption(e)
+    elif job_status == "done":
+        res = get_job_result(job_id_input)
+
+if res is None:
+    if not job_id_input:
+        st.info("Click 'Solve' to start a run, or enter a job ID above to check on one.")
+elif res.get("status") in ("VALIDATION_ERROR", "OPTIMIZER_NOT_FOUND"):
+    st.error("The staffing and demand files are inconsistent, or the optimizer couldn't be reached:")
+    for e in res.get("errors", []):
+        st.write(f"- {e}")
+elif res.get("status") == "NO FEASIBLE SOLUTION WAS FOUND":
+    st.error("NO FEASIBLE SOLUTION WAS FOUND")
+else:
     status = res.get("status", "N/A")
     obj = res.get("objective", None)
-
-    if status == "NO FEASIBLE SOLUTION WAS FOUND":
-        st.error(status)
-        st.stop() # return immediately after detecting infeasible solve
-    else:
-        obj_str = "N/A" if obj is None else f"{float(obj):.4f}"
-        st.success(f"Status: {status} | Objective: {obj_str}")
-
+    obj_str = "N/A" if obj is None else f"{float(obj):.4f}"
+    st.success(f"Status: {status} | Objective: {obj_str}")
 
     # --------------------------------------------------------------------
     # Output Tables
