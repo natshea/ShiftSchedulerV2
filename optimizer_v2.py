@@ -632,8 +632,6 @@ def build_and_solve_shift_model(
     # )
 
     model.solve(solver)
-    print("DEBUG PuLP status:", model.status)
-    print("DEBUG PuLP status string:", pulp.LpStatus.get(model.status))
     end_time = time.time()
 
     status_str = pulp.LpStatus.get(model.status, str(model.status))
