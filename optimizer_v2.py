@@ -638,7 +638,6 @@ def build_and_solve_shift_model(
 
     status_str = pulp.LpStatus.get(model.status, str(model.status))
 
-
     # ✅ If infeasible (or no feasible found within time), return required message
     if status_str in {"Infeasible", "Undefined", "Not Solved"} or model.status == pulp.LpStatusInfeasible:
         return {
