@@ -672,7 +672,7 @@ def build_and_solve_shift_model(
 
     return {
         "status": "Optimal" if status_str == "Optimal" else status_str,
-        "objective": pulp.value(model.objective),
+        "objective": pulp.value(model.objective), 
         "elapsed_time": end_time - start_time,
         "shift_schedule": shift_schedule, 
         "shift_adult": shift_adult, 
