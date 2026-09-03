@@ -1,14 +1,13 @@
-# streamlit_app_v2.py - in the terminal, run the following command to start the application:
-    # streamlit run streamlit_app_v2.py
+# streamlit_app_v2.py - to run locally, in the terminal, run the following command 
+# to start the application: streamlit run streamlit_app_v2.py
 
 # ------------------ Imports ------------------
 
 import streamlit as st
 import copy
-import time as time_module
 from utils import (
     read_table_file_demand, read_table_file_staff, build_shift_set_fallback,
-    create_excel_download, start_background_job, get_job_status, get_job_result, list_jobs
+    create_excel_download, start_solve_job, get_solve_status, get_solve_result
 )
 from collections import defaultdict
 
@@ -128,25 +127,21 @@ try:
 except Exception as e:
     opt_import_error = e
 
+# ------------------------------------------------------------------------------------- 
+
 # ------------------ Adapter ------------------
 def adapt_to_user_optimizer(demand_df, staff_df, max_dev, unavailability, priority_slots,
                              M_choice, N_choice, constraints_flag):
-    """
-    Pure function: no Streamlit calls, no module-level globals. This makes it safe
-    to run inside a background thread (Streamlit commands and widget-backed globals
-    are not thread-safe / not available outside the main script run).
 
-    Returns a dict. On validation failure: {"status": "VALIDATION_ERROR", "errors": [...]}
-    On infeasibility: {"status": "NO FEASIBLE SOLUTION WAS FOUND", ...}
-    Otherwise: the full results dict used by the UI.
-    """
     if opt_mod is None or not hasattr(opt_mod, "build_and_solve_shift_model"):
-        return {"status": "OPTIMIZER_NOT_FOUND", "errors": ["Optimizer module not found or missing build_and_solve_shift_model."]}
+        return {
+            "status": "OPTIMIZER_NOT_FOUND", 
+            "errors": ["Optimizer module not found or missing the optimizer model."]
+            }
 
     # --------------------------------------------------------------------
     # Sets
     # --------------------------------------------------------------------
-
     W = list(staff_df["name"].astype(str))
     D = list(range(1, 29)) # all days of 4 weeks
     T = list(range(1, 19)) # 18 time slots
@@ -186,10 +181,10 @@ def adapt_to_user_optimizer(demand_df, staff_df, max_dev, unavailability, priori
     # --------------------------------------------------------------------
     # Validate demand and staff files - need total MaxHw ≥ total Demand
     # --------------------------------------------------------------------
-
-    # Note: It is not mandatory that total MinHw ≤ total Demand because overstaffing is permitted and better
-    # than understaffing. Therefore, that check is commented out but can be added back in if required.
-    # Check if MinHw ≤ Demand ≤ MaxHw for each location
+        # Note: It is not mandatory that total MinHw ≤ total Demand because overstaffing is permitted and better
+        # than understaffing. Therefore, that check is commented out but can be added back in if required.
+        # Check if MinHw ≤ Demand ≤ MaxHw for each location
+    
     errors = []
 
     for u in U:
@@ -225,8 +220,6 @@ def adapt_to_user_optimizer(demand_df, staff_df, max_dev, unavailability, priori
              Max_Deviation=float(max_dev), 
              unavailability=unavailability, 
              constraints_flag=constraints_flag)
-             # time_limit intentionally NOT overridden here - optimizer_v2.py's own
-             # default governs, since solves can legitimately run for hours.
 
 
     # Check for error
@@ -591,7 +584,7 @@ with st.sidebar:
 
 
 # --------------------------------------------------------------------
-# Demand load (TRANSPOSE)
+# Demand load
 # --------------------------------------------------------------------
 if demand_file:
     raw = read_table_file_demand(demand_file, header=0)
@@ -637,218 +630,197 @@ else:
     demand = {"DEFAULT": pd.DataFrame(np.zeros((28, 18), dtype=float))}
 
 
-# ------------------ Solve ------------------
-if "job_history" not in st.session_state:
-    st.session_state["job_history"] = []  # job_ids started from this browser session, most recent first
+# ------------------ Solve ------------------ 
+current_status = get_solve_status()
 
-if st.button("Solve", key="solve_button"):
+col1, col2 = st.columns([1, 1])
+
+with col1: # Solve button
+    solve_clicked = st.button(
+        "Solve",
+        key="solve_button",
+        disabled=(current_status == "running"),
+        help="Disabled while a solve is already running." if current_status == "running" else None,
+    )
+
+with col2: # Check Results button
+    check_clicked = st.button("Check Results", key="check_results_button")
+
+if solve_clicked:
     if opt_mod is None or not hasattr(opt_mod, "build_and_solve_shift_model"):
-        st.error("Optimizer not found or missing build_and_solve_shift_model.")
+        st.error("Optimizer model not found.")
         if opt_import_error:
             st.caption(f"Import error: {opt_import_error}")
         st.stop()
 
-    # Snapshot every input the solve needs. This is essential: the solve runs in
-    # a background thread that may still be running the NEXT time this script
-    # reruns (e.g. if the user tweaks a sidebar widget), and widgets/session_state
-    # are mutable. Without snapshotting, the background thread could end up
-    # reading values that changed after the job was submitted.
-    job_id = start_background_job(
-        adapt_to_user_optimizer,
-        copy.deepcopy(st.session_state["demand_df"]),
-        copy.deepcopy(st.session_state["staff_df"]),
-        float(max_dev),
-        copy.deepcopy(st.session_state["unavailability"]),
-        copy.deepcopy(st.session_state["priority_slots"]),
-        int(M_choice),
-        int(N_choice),
-        copy.deepcopy(constraints_flag),
+
+    # Start running the solve job, runs outside of Streamlit UI and set to the disk
+        # Note: Taking deepcopy of the UI sidebar's inputs/selections in case they get
+        # adjusted after the "Solve" button is clicked.
+    start_solve_job(
+        adapt_to_user_optimizer, # job_fn
+        copy.deepcopy(st.session_state["demand_df"]), # demand_df
+        copy.deepcopy(st.session_state["staff_df"]), # staff_df
+        float(max_dev), # max_dev
+        copy.deepcopy(st.session_state["unavailability"]), # unavailability
+        copy.deepcopy(st.session_state["priority_slots"]), # priority_slots
+        int(M_choice), # M_choice
+        int(N_choice), # N_choice
+        copy.deepcopy(constraints_flag), # constraints_flag
     )
-    st.session_state["job_history"].insert(0, job_id)
-    st.session_state["current_job_id"] = job_id
-    st.rerun()
+    st.success("The optimizer has started solving in the background. It'll keep running "
+               "even if you close this tab - come back anytime and click 'Check Results'.")
+    st.stop()
 
 
-# --------------------------------------------------------------------
-# Job status / results
-# --------------------------------------------------------------------
-st.markdown("---")
-st.markdown("### Job Status")
-st.caption(
-    "Solves can take hours. This runs independently of your browser connection - "
-    "closing the tab or losing the connection won't lose the job. Save the job ID "
-    "below to check back later from any browser, on this same deployed app."
-)
+# ------------------ Results (when "Check Results" is clicked) ------------------ 
 
-known_jobs = list_jobs()  # everything on disk, so even a brand-new session can find old jobs
+if check_clicked:
+    status = get_solve_status() # Get the status of the optimizer (i.e., idle, running, done, error)
 
-default_job_id = st.session_state.get("current_job_id", "")
-job_id_input = st.text_input(
-    "Job ID to check",
-    value=default_job_id,
-    key="job_id_lookup",
-    placeholder="e.g. 20260825_143000_ab12cd34",
-)
-
-if known_jobs:
-    with st.expander(f"Recent jobs on this deployment ({len(known_jobs)})"):
-        for jid, jstatus in known_jobs:
-            st.write(f"`{jid}` — {jstatus}")
-
-res = None
-if job_id_input:
-    job_status = get_job_status(job_id_input)
-
-    if job_status == "unknown":
-        st.warning(f"No job found with ID `{job_id_input}`.")
-    elif job_status == "running":
-        auto_refresh = st.checkbox("Auto-refresh while waiting", value=True, key="auto_refresh_job")
-        st.info(f"Job `{job_id_input}` is still running. Check back anytime - "
-                "this page doesn't need to stay open.")
-        if auto_refresh:
-            time_module.sleep(5)
-            st.rerun()
-    elif job_status == "error":
-        err_res = get_job_result(job_id_input)
-        st.error("The job failed with an error.")
+    # Text to display for different solve job statuses
+    if status == "idle":
+        st.info("No solve has been run yet. Click 'Solve' to start one.")
+    elif status == "running":
+        st.info("Still running. This can take a while for larger inputs - check back later.")
+    elif status == "error":
+        err_res = get_solve_result()
+        st.error("The last solve failed with an error.")
         if err_res:
             for e in err_res.get("errors", []):
                 st.caption(e)
-    elif job_status == "done":
-        res = get_job_result(job_id_input)
+    elif status == "done":
+        res = get_solve_result()
 
-if res is None:
-    if not job_id_input:
-        st.info("Click 'Solve' to start a run, or enter a job ID above to check on one.")
-elif res.get("status") in ("VALIDATION_ERROR", "OPTIMIZER_NOT_FOUND"):
-    st.error("The staffing and demand files are inconsistent, or the optimizer couldn't be reached:")
-    for e in res.get("errors", []):
-        st.write(f"- {e}")
-elif res.get("status") == "NO FEASIBLE SOLUTION WAS FOUND":
-    st.error("NO FEASIBLE SOLUTION WAS FOUND")
-else:
-    status = res.get("status", "N/A")
-    obj = res.get("objective", None)
-    obj_str = "N/A" if obj is None else f"{float(obj):.4f}"
-    st.success(f"Status: {status} | Objective: {obj_str}")
+        if res.get("status") in ("VALIDATION_ERROR", "OPTIMIZER_NOT_FOUND"): # Error from optimizer model
+            st.error("The staffing and demand files are inconsistent, or the optimizer couldn't be reached:")
+            for e in res.get("errors", []):
+                st.write(f"- {e}")
+        elif res.get("status") == "NO FEASIBLE SOLUTION WAS FOUND": # Optimizer ran fully, no feasible solution
+            st.error("NO FEASIBLE SOLUTION WAS FOUND")
+        else: # If successful, outputs the status (i.e., Optimal) and the objective value
+            solve_status = res.get("status", "N/A")
+            obj = res.get("objective", None)
+            obj_str = "N/A" if obj is None else f"{float(obj):.4f}"
+            st.success(f"Status: {solve_status} | Objective: {obj_str}")
 
-    # --------------------------------------------------------------------
-    # Output Tables
-    # --------------------------------------------------------------------
+            # --------------------------------------------------------------------
+            # Output Tables
+            # --------------------------------------------------------------------
 
-    ### Weekly hours per worker table
-    # Display table
-    st.write("#### Weekly Hours per Worker")
-    hours_df = res["hours_df"]
-    st.dataframe(res["hours_df"], width='stretch') # display in UI
-
-    # Download button
-    hours_excel = create_excel_download({
-        "Weekly Hours": hours_df
-    })
-
-    st.download_button(
-        label="Download Weekly Hours",
-        data=hours_excel,
-        file_name="weekly_hours.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="download_weekly_hours",
-        on_click="ignore"
-    )
-
-
-    ### Per Location Coverage tables
-    # Display table
-    st.write("#### Coverage")
-    coverage = res["coverage_df"]
-    for loc, df in coverage.items():
-        st.write(f"##### {loc}")
-        st.dataframe(df, width="stretch")
-
-    # Download button
-    coverage_tables = { # to do in 1 Excel file
-        str(loc): df
-        for loc, df in coverage.items()
-    }
-
-    coverage_excel = create_excel_download(coverage_tables)
-
-    st.download_button(
-        label="Download All Coverage Tables",
-        data=coverage_excel,
-        file_name="coverage.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="download_coverage",
-        on_click="ignore"
-    )
-
-
-    ### Per Worker Schedule
-    # Display table
-    st.write("#### Per-Worker Schedule (hourly over 4 weeks)")
-
-    assignments_df = res.get("assignments_df", pd.DataFrame(columns=["name","day","start_slot","end_slot"]))
-
-    worker_schedule_tables = {}
-    if assignments_df.empty:
-        st.write("No assignments have been made.")
-    else:
-        for w in assignments_df["name"].astype(str).unique().tolist():
-            mat = np.zeros((28, 18), dtype=int)
-            sub = assignments_df[assignments_df["name"] == w]
-            for _, r in sub.iterrows(): 
-                day = int(r["day"]) - 1
-                start = int(r["start_slot"])
-                end = int(r["end_slot"])
-                for t in range(start, end + 1):
-                    mat[day, t - 1] = 1
-            worker_df = pd.DataFrame(
-                            mat,
-                            columns=SLOT_LABELS,
-                            index=DAY_LABELS_FULL
-                        )
-
+            ### Weekly hours per worker table
             # Display table
-            with st.expander(w):
-                st.dataframe(worker_df, width='stretch')
+            st.write("#### Weekly Hours per Worker")
+            hours_df = res["hours_df"]
+            st.dataframe(res["hours_df"], width='stretch') # display in UI
 
-            # Store for Excel download
-            worker_schedule_tables[w] = worker_df
+            # Download button
+            hours_excel = create_excel_download({
+                "Weekly Hours": hours_df
+            })
 
-    # Download button
-    if worker_schedule_tables:
-        worker_excel = create_excel_download(worker_schedule_tables)
+            st.download_button(
+                label="Download Weekly Hours",
+                data=hours_excel,
+                file_name="weekly_hours.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_weekly_hours",
+                on_click="ignore"
+            )
 
-        st.download_button(
-            label="Download All Per-Worker Schedules",
-            data=worker_excel,
-            file_name="per_worker_schedules.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="download_worker_schedules",
-            on_click="ignore"
-        )
 
-    ### All Worker Schedule (Worker, Location, Assignments)
-    # Display table
-    st.write("#### All Worker Schedule (Worker, Location, Assignments)")
+            ### Per Location Coverage tables
+            # Display table
+            st.write("#### Coverage")
+            coverage = res["coverage_df"]
+            for loc, df in coverage.items():
+                st.write(f"##### {loc}")
+                st.dataframe(df, width="stretch")
 
-    all_worker_coverage_df = res.get("all_worker_coverage_df", pd.DataFrame())
+            # Download button
+            coverage_tables = { # to do in 1 Excel file
+                str(loc): df
+                for loc, df in coverage.items()
+            }
 
-    if all_worker_coverage_df.empty:
-        st.write("No works have been assigned.")
-    else:
-        st.dataframe(all_worker_coverage_df, width="stretch")
+            coverage_excel = create_excel_download(coverage_tables)
 
-        # Download button
-        all_workers_excel = create_excel_download({
-                    "All Worker Schedules": all_worker_coverage_df
-                })
+            st.download_button(
+                label="Download All Coverage Tables",
+                data=coverage_excel,
+                file_name="coverage.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_coverage",
+                on_click="ignore"
+            )
 
-        st.download_button(
-            label="Download All Worker Schedule",
-            data=all_workers_excel,
-            file_name="all_worker_schedules.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="download_all_worker_schedules",
-            on_click="ignore"
-        )
+
+            ### Per Worker Schedule
+            # Display table
+            st.write("#### Per-Worker Schedule (hourly over 4 weeks)")
+
+            assignments_df = res.get("assignments_df", pd.DataFrame(columns=["name","day","start_slot","end_slot"]))
+
+            worker_schedule_tables = {}
+            if assignments_df.empty:
+                st.write("No assignments have been made.")
+            else:
+                for w in assignments_df["name"].astype(str).unique().tolist():
+                    mat = np.zeros((28, 18), dtype=int)
+                    sub = assignments_df[assignments_df["name"] == w]
+                    for _, r in sub.iterrows(): 
+                        day = int(r["day"]) - 1
+                        start = int(r["start_slot"])
+                        end = int(r["end_slot"])
+                        for t in range(start, end + 1):
+                            mat[day, t - 1] = 1
+                    worker_df = pd.DataFrame(
+                                    mat,
+                                    columns=SLOT_LABELS,
+                                    index=DAY_LABELS_FULL
+                                )
+
+                    # Display table
+                    with st.expander(w):
+                        st.dataframe(worker_df, width='stretch')
+
+                    # Store for Excel download
+                    worker_schedule_tables[w] = worker_df
+
+            # Download button
+            if worker_schedule_tables:
+                worker_excel = create_excel_download(worker_schedule_tables)
+
+                st.download_button(
+                    label="Download All Per-Worker Schedules",
+                    data=worker_excel,
+                    file_name="per_worker_schedules.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="download_worker_schedules",
+                    on_click="ignore"
+                )
+
+            ### All Worker Schedule (Worker, Location, Assignments)
+            # Display table
+            st.write("#### All Worker Schedule (Worker, Location, Assignments)")
+
+            all_worker_coverage_df = res.get("all_worker_coverage_df", pd.DataFrame())
+
+            if all_worker_coverage_df.empty:
+                st.write("No works have been assigned.")
+            else:
+                st.dataframe(all_worker_coverage_df, width="stretch")
+
+                # Download button
+                all_workers_excel = create_excel_download({
+                            "All Worker Schedules": all_worker_coverage_df
+                        })
+
+                st.download_button(
+                    label="Download All Worker Schedule",
+                    data=all_workers_excel,
+                    file_name="all_worker_schedules.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="download_all_worker_schedules",
+                    on_click="ignore"
+                )
