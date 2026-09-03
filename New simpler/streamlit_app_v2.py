@@ -1,11 +1,11 @@
-# streamlit_app_v2.py - in the terminal, run the following command to start the application:
-    # streamlit run streamlit_app_v2.py
+# streamlit_app_v2.py - to run locally, in the terminal, run the following command 
+# to start the application: streamlit run streamlit_app_v2.py
 
 # ------------------ Imports ------------------
 
 import streamlit as st
 import copy
-from utils import ( #!!!
+from utils import (
     read_table_file_demand, read_table_file_staff, build_shift_set_fallback,
     create_excel_download, start_solve_job, get_solve_status, get_solve_result
 )
@@ -127,25 +127,21 @@ try:
 except Exception as e:
     opt_import_error = e
 
+# ------------------------------------------------------------------------------------- 
+
 # ------------------ Adapter ------------------
 def adapt_to_user_optimizer(demand_df, staff_df, max_dev, unavailability, priority_slots,
                              M_choice, N_choice, constraints_flag):
-    """
-    Pure function: no Streamlit calls, no module-level globals. This makes it safe
-    to run inside a background thread (Streamlit commands and widget-backed globals
-    are not thread-safe / not available outside the main script run).
 
-    Returns a dict. On validation failure: {"status": "VALIDATION_ERROR", "errors": [...]}
-    On infeasibility: {"status": "NO FEASIBLE SOLUTION WAS FOUND", ...}
-    Otherwise: the full results dict used by the UI.
-    """
-    if opt_mod is None or not hasattr(opt_mod, "build_and_solve_shift_model"): #!!!
-        return {"status": "OPTIMIZER_NOT_FOUND", "errors": ["Optimizer module not found or missing build_and_solve_shift_model."]}
+    if opt_mod is None or not hasattr(opt_mod, "build_and_solve_shift_model"):
+        return {
+            "status": "OPTIMIZER_NOT_FOUND", 
+            "errors": ["Optimizer module not found or missing the optimizer model."]
+            }
 
     # --------------------------------------------------------------------
     # Sets
     # --------------------------------------------------------------------
-
     W = list(staff_df["name"].astype(str))
     D = list(range(1, 29)) # all days of 4 weeks
     T = list(range(1, 19)) # 18 time slots
@@ -185,10 +181,10 @@ def adapt_to_user_optimizer(demand_df, staff_df, max_dev, unavailability, priori
     # --------------------------------------------------------------------
     # Validate demand and staff files - need total MaxHw ≥ total Demand
     # --------------------------------------------------------------------
-
-    # Note: It is not mandatory that total MinHw ≤ total Demand because overstaffing is permitted and better
-    # than understaffing. Therefore, that check is commented out but can be added back in if required.
-    # Check if MinHw ≤ Demand ≤ MaxHw for each location
+        # Note: It is not mandatory that total MinHw ≤ total Demand because overstaffing is permitted and better
+        # than understaffing. Therefore, that check is commented out but can be added back in if required.
+        # Check if MinHw ≤ Demand ≤ MaxHw for each location
+    
     errors = []
 
     for u in U:
@@ -588,7 +584,7 @@ with st.sidebar:
 
 
 # --------------------------------------------------------------------
-# Demand load (TRANSPOSE)
+# Demand load
 # --------------------------------------------------------------------
 if demand_file:
     raw = read_table_file_demand(demand_file, header=0)
@@ -634,12 +630,12 @@ else:
     demand = {"DEFAULT": pd.DataFrame(np.zeros((28, 18), dtype=float))}
 
 
-# ------------------ Solve ------------------
+# ------------------ Solve ------------------ 
 current_status = get_solve_status()
 
 col1, col2 = st.columns([1, 1])
 
-with col1:
+with col1: # Solve button
     solve_clicked = st.button(
         "Solve",
         key="solve_button",
@@ -647,43 +643,42 @@ with col1:
         help="Disabled while a solve is already running." if current_status == "running" else None,
     )
 
-with col2:
+with col2: # Check Results button
     check_clicked = st.button("Check Results", key="check_results_button")
 
 if solve_clicked:
     if opt_mod is None or not hasattr(opt_mod, "build_and_solve_shift_model"):
-        st.error("Optimizer not found or missing build_and_solve_shift_model.")
+        st.error("Optimizer model not found.")
         if opt_import_error:
             st.caption(f"Import error: {opt_import_error}")
         st.stop()
 
-    # Snapshot every input the solve needs. This is essential: the solve runs in
-    # a background thread that may still be running the NEXT time this script
-    # reruns (e.g. if the user tweaks a sidebar widget), and widgets/session_state
-    # are mutable. Without snapshotting, the background thread could end up
-    # reading values that changed after the job was submitted.
+
+    # Start running the solve job, runs outside of Streamlit UI and set to the disk
+        # Note: Taking deepcopy of the UI sidebar's inputs/selections in case they get
+        # adjusted after the "Solve" button is clicked.
     start_solve_job(
-        adapt_to_user_optimizer,
-        copy.deepcopy(st.session_state["demand_df"]),
-        copy.deepcopy(st.session_state["staff_df"]),
-        float(max_dev),
-        copy.deepcopy(st.session_state["unavailability"]),
-        copy.deepcopy(st.session_state["priority_slots"]),
-        int(M_choice),
-        int(N_choice),
-        copy.deepcopy(constraints_flag),
+        adapt_to_user_optimizer, # job_fn
+        copy.deepcopy(st.session_state["demand_df"]), # demand_df
+        copy.deepcopy(st.session_state["staff_df"]), # staff_df
+        float(max_dev), # max_dev
+        copy.deepcopy(st.session_state["unavailability"]), # unavailability
+        copy.deepcopy(st.session_state["priority_slots"]), # priority_slots
+        int(M_choice), # M_choice
+        int(N_choice), # N_choice
+        copy.deepcopy(constraints_flag), # constraints_flag
     )
-    st.success("Solve started in the background. It'll keep running even if you close this tab - "
-               "come back anytime and click 'Check Results'.")
+    st.success("The optimizer has started solving in the background. It'll keep running "
+               "even if you close this tab - come back anytime and click 'Check Results'.")
     st.stop()
 
 
-# --------------------------------------------------------------------
-# Results (only rendered when "Check Results" is clicked)
-# --------------------------------------------------------------------
-if check_clicked:
-    status = get_solve_status()
+# ------------------ Results (when "Check Results" is clicked) ------------------ 
 
+if check_clicked:
+    status = get_solve_status() # Get the status of the optimizer (i.e., idle, running, done, error)
+
+    # Text to display for different solve job statuses
     if status == "idle":
         st.info("No solve has been run yet. Click 'Solve' to start one.")
     elif status == "running":
@@ -697,13 +692,13 @@ if check_clicked:
     elif status == "done":
         res = get_solve_result()
 
-        if res.get("status") in ("VALIDATION_ERROR", "OPTIMIZER_NOT_FOUND"):
+        if res.get("status") in ("VALIDATION_ERROR", "OPTIMIZER_NOT_FOUND"): # Error from optimizer model
             st.error("The staffing and demand files are inconsistent, or the optimizer couldn't be reached:")
             for e in res.get("errors", []):
                 st.write(f"- {e}")
-        elif res.get("status") == "NO FEASIBLE SOLUTION WAS FOUND":
+        elif res.get("status") == "NO FEASIBLE SOLUTION WAS FOUND": # Optimizer ran fully, no feasible solution
             st.error("NO FEASIBLE SOLUTION WAS FOUND")
-        else:
+        else: # If successful, outputs the status (i.e., Optimal) and the objective value
             solve_status = res.get("status", "N/A")
             obj = res.get("objective", None)
             obj_str = "N/A" if obj is None else f"{float(obj):.4f}"
