@@ -1,96 +1,19 @@
-# utils.py - contains helper functions used in the optimizer and streamlit py files:
+# utils.py - contains helper functions used in the optimizer and streamlit py files
+# and functions to solve the optimizer model in the background of the Streamlit UI 
+# and be able to retrieve results later:
 
 import os
 import pickle
 import threading
-import time
-import uuid
 import pandas as pd
 from io import BytesIO
 
-# ------------------ Background job store ------------------
-# A job's status/result is written to disk (not just st.session_state), so that:
-#   - a browser disconnect/reconnect mid-solve doesn't lose anything
-#   - closing the tab and coming back hours later still finds the result
-#   - a completely different browser session/tab can look up the same job by ID
-# This survives as long as the underlying app process/container stays alive,
-# which is the same durability the background thread itself depends on.
+# --------------------------------------------------------------------
+# Helpers
+# --------------------------------------------------------------------
 
-JOB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "job_store")
-os.makedirs(JOB_DIR, exist_ok=True)
-
-_job_lock = threading.Lock()
-
-
-def _job_paths(job_id):
-    base = os.path.join(JOB_DIR, job_id)
-    return base + ".status", base + ".result"
-
-
-def start_background_job(job_fn, *args, **kwargs):
-    """
-    Runs job_fn(*args, **kwargs) in a background thread and returns a job_id
-    immediately (non-blocking). job_fn must NOT call any Streamlit (st.*)
-    commands - it runs outside any Streamlit script context.
-
-    Status/result are persisted to disk under JOB_DIR, keyed by job_id.
-    """
-    job_id = time.strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:8]
-    status_path, result_path = _job_paths(job_id)
-
-    with _job_lock:
-        with open(status_path, "w") as f:
-            f.write("running")
-
-    def _runner():
-        try:
-            result = job_fn(*args, **kwargs)
-            with open(result_path, "wb") as f:
-                pickle.dump(result, f)
-            with _job_lock:
-                with open(status_path, "w") as f:
-                    f.write("done")
-        except Exception as e:
-            with open(result_path, "wb") as f:
-                pickle.dump({"status": "ERROR", "errors": [str(e)]}, f)
-            with _job_lock:
-                with open(status_path, "w") as f:
-                    f.write("error")
-
-    t = threading.Thread(target=_runner, daemon=True)
-    t.start()
-    return job_id
-
-
-def get_job_status(job_id):
-    """Returns 'running' | 'done' | 'error' | 'unknown'."""
-    status_path, _ = _job_paths(job_id)
-    if not os.path.exists(status_path):
-        return "unknown"
-    with open(status_path) as f:
-        return f.read().strip()
-
-
-def get_job_result(job_id):
-    """Returns the unpickled result dict, or None if not yet available."""
-    _, result_path = _job_paths(job_id)
-    if not os.path.exists(result_path):
-        return None
-    with open(result_path, "rb") as f:
-        return pickle.load(f)
-
-
-def list_jobs(limit=20):
-    """Returns [(job_id, status), ...] newest first, for browsing without needing session_state."""
-    job_ids = sorted(
-        {fname.rsplit(".", 1)[0] for fname in os.listdir(JOB_DIR)},
-        reverse=True
-    )[:limit]
-    return [(job_id, get_job_status(job_id)) for job_id in job_ids]
-
-
-# ------------------ Helpers ------------------
-def read_table_file(uploaded_file, header=0): # original model: reading the files
+# Model v1 function to read demand and staff files
+def read_table_file(uploaded_file, header=0):
     name = uploaded_file.name.lower()
     if name.endswith(".csv"):
         return pd.read_csv(uploaded_file, header=header)
@@ -98,7 +21,9 @@ def read_table_file(uploaded_file, header=0): # original model: reading the file
         return pd.read_excel(uploaded_file, header=header)  # requires openpyxl for xlsx
     raise ValueError("Unsupported file type")
 
-def read_table_file_demand(uploaded_file, header=0): # read in the demand file
+
+# Read demand file
+def read_table_file_demand(uploaded_file, header=0): 
     name = uploaded_file.name.lower()
     if name.endswith((".xlsx", ".xls")):
         x_file = pd.ExcelFile(uploaded_file)
@@ -113,7 +38,9 @@ def read_table_file_demand(uploaded_file, header=0): # read in the demand file
     
     raise ValueError("Unsupported file type")
 
-def read_table_file_staff(uploaded_file, header=0): # read in the demand file
+
+# Read staff file
+def read_table_file_staff(uploaded_file, header=0):
     name = uploaded_file.name.lower()
     if name.endswith((".xlsx", ".xls")):
         staff_file = pd.read_excel(uploaded_file, header=header, sheet_name=0) # only get 1st sheet
@@ -139,32 +66,94 @@ def read_table_file_staff(uploaded_file, header=0): # read in the demand file
     raise ValueError("Unsupported file type")
 
 
-def build_shift_set_fallback(T, min_len=4, max_len=8): # creating feasible shifts
+# Create feasible shifts
+def build_shift_set_fallback(T, min_len=4, max_len=8):
     return [(s, e) for s in T for e in T if min_len <= e - s + 1 <= max_len]
 
-def week_of(d): # returns corresponding k; e.g., week_of(13) returns 2
+
+# Returns corresponding "k"; e.g., week_of(13) returns 2
+def week_of(d):
     return (d - 1) // 7 + 1
 
-def weekday_of(d): # returns corresponding number as 1=Monday,...,7=Sunday; e.g., weekday_of(13) returns 6
+
+# Returns corresponding number as 1=Monday,...,7=Sunday; e.g., weekday_of(13) returns 6
+def weekday_of(d):
     return ((d - 1) % 7) + 1
 
 
-def create_excel_download(tables):  
-    """
-    tables: dictionary of {sheet_name: dataframe}
-    Returns an Excel file as bytes.
-    """
-    output = BytesIO()
+# Create the tables, return Excel file as bytes
+def create_excel_download(tables): 
+    output = BytesIO() # Excel file as bytes
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         for sheet_name, df in tables.items():
-            # Excel sheet names cannot exceed 31 characters
-            sheet_name = str(sheet_name)[:31]
+            sheet_name = str(sheet_name)[:31] # limit excel sheet names to 31 characters
 
-            # Remove characters that Excel doesn't allow in sheet names
-            for char in ["\\", "/", "*", "[", "]", ":", "?"]:
+            for char in ["\\", "/", "*", "[", "]", ":", "?"]: # remove characters not allowed in Excel sheet names
                 sheet_name = sheet_name.replace(char, "_")
 
             df.to_excel(writer, sheet_name=sheet_name, index=True)
 
     return output.getvalue()
+
+# --------------------------------------------------------------------
+# Solve Running in Background - Separate from Streamlit UI
+# --------------------------------------------------------------------
+    # The optimizer can initiate the solve in the Streamlit UI, then runs in the background 
+    # and the status and results are written to disk rather than to the streamlit session. 
+    # This means that if the browser disconnects/reconnects while solving, it doesn't lose 
+    # anything, and closing the tab and returning later can still generate the result. Note 
+    # that only one "solve" can happen at a time.
+
+
+JOB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "job_store")
+os.makedirs(JOB_DIR, exist_ok=True)
+
+SOLVE_STATUS_PATH = os.path.join(JOB_DIR, "solve.status")
+SOLVE_RESULT_PATH = os.path.join(JOB_DIR, "solve.result")
+
+_solve_lock = threading.Lock()
+
+
+# Start running the solve job, runs outside of Streamlit UI and set to the disk
+def start_solve_job(job_fn, *args, **kwargs):
+
+    with _solve_lock:
+        with open(SOLVE_STATUS_PATH, "w") as f:
+            f.write("running")
+        if os.path.exists(SOLVE_RESULT_PATH):
+            os.remove(SOLVE_RESULT_PATH)
+
+    def _runner():
+        try:
+            result = job_fn(*args, **kwargs)
+            with open(SOLVE_RESULT_PATH, "wb") as f:
+                pickle.dump(result, f)
+            with _solve_lock:
+                with open(SOLVE_STATUS_PATH, "w") as f:
+                    f.write("done")
+        except Exception as e:
+            with open(SOLVE_RESULT_PATH, "wb") as f:
+                pickle.dump({"status": "ERROR", "errors": [str(e)]}, f)
+            with _solve_lock:
+                with open(SOLVE_STATUS_PATH, "w") as f:
+                    f.write("error")
+
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+
+
+# Get the status of the optimizer (i.e., idle, running, done, error)
+def get_solve_status():
+    if not os.path.exists(SOLVE_STATUS_PATH):
+        return "idle"
+    with open(SOLVE_STATUS_PATH) as f:
+        return f.read().strip()
+
+
+# Get the result (i.e., tables) of the optimizer, or say None if it's not yet available
+def get_solve_result():
+    if not os.path.exists(SOLVE_RESULT_PATH):
+        return None
+    with open(SOLVE_RESULT_PATH, "rb") as f:
+        return pickle.load(f)
