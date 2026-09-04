@@ -3,6 +3,9 @@
 import pulp
 import time
 from utils import week_of, weekday_of
+import psutil
+import os
+
 
 def build_and_solve_shift_model(
     W,                      # list: workers
@@ -594,6 +597,7 @@ def build_and_solve_shift_model(
 
     # ------------------ Solve ------------------
     start_time = time.time()
+    memory_usage_start = psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)
 
     # ### CBC SOLVER ###
     # solver = pulp.PULP_CBC_CMD(msg=True, presolve=True, cuts=True, strong=True, threads=8, 
@@ -632,6 +636,7 @@ def build_and_solve_shift_model(
 
     model.solve(solver)
     end_time = time.time()
+    memory_usage_end = psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)
 
     status_str = pulp.LpStatus.get(model.status, str(model.status))
 
@@ -674,6 +679,7 @@ def build_and_solve_shift_model(
         "status": "Optimal" if status_str == "Optimal" else status_str,
         "objective": pulp.value(model.objective), 
         "elapsed_time": end_time - start_time,
+        "memory_used": memory_usage_end - memory_usage_start,
         "shift_schedule": shift_schedule, 
         "shift_adult": shift_adult, 
         "onduty_adult": onduty_adult, 
