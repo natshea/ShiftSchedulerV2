@@ -361,6 +361,7 @@ def adapt_to_user_optimizer(demand_df, staff_df, max_dev, unavailability, priori
         "status": res.get("status", "N/A"),
         "objective": res.get("objective", float("nan")),
         "elapsed_time": res.get("elapsed_time", float("nan")),
+        "memory_used": res.get("memory_used", float("nan")),
         "coverage_df": cov, # dictionary of dfs
         "hours_df": pd.DataFrame(hours),
         "assignments_df": pd.DataFrame(assigns), 
@@ -703,8 +704,9 @@ if check_clicked:
             solve_status = res.get("status", "N/A")
             obj = res.get("objective", None)
             timing = res.get("elapsed_time", None)
+            memory_used = res.get("memory_used", None)
             obj_str = "N/A" if obj is None else f"{float(obj):.4f}"
-            st.success(f"Status: {solve_status} | Objective: {obj_str} | Time: {timing:.2f} seconds")
+            st.success(f"Status: {solve_status} | Objective: {obj_str} | Time: {timing:.2f} seconds | Memory: {memory_used:.2f} MB")
 
             # --------------------------------------------------------------------
             # Output Tables
